@@ -43,4 +43,41 @@ impl Spawner {
     }
 }
 
-fn main() {}
+impl ArcWake for Task {
+    fn wake_by_ref(arc_self: &Arc<Self>) {
+        let cloned = arc_self.clone();
+        arc_self
+            .task_sender
+            .send(cloned)
+            .expect("too many tasks queued");
+    }
+}
+
+impl Executor {
+    fn run(&self) {
+        while let Ok(task) = self.ready_queue.recv() {
+            let mut future_slot = task.future.lock().unwrap();
+            if let Some(mut future) = future_slot.take() {
+                let waker = waker_ref(&task);
+                let context = &mut Context::from_waker(&waker);
+                if future.as_mut().poll(context).is_pending() {
+                    *future_slot = Some(future);
+                }
+            }
+        }
+    }
+}
+
+fn main() {
+    let (executor, spawner) = new_executor_and_spawner();
+
+    spawner.spawn(async {
+        println!("howdy!");
+        TimerFuture::new(Duration::new(2, 0)).await;
+        println!("done!");
+    });
+
+    drop(spawner);
+
+    executor.run();
+}
